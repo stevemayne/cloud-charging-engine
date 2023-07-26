@@ -5,11 +5,15 @@ const fs = require("fs");
 const util = require("util");
 const KEY = `account1/balance`;
 const DEFAULT_BALANCE = 1000;
+const VOICE_UNIT_CHARGE = 5;
+const TEXT_UNIT_CHARGE = 2;
+const SERVICE_TYPE_VOICE = 'voice';
+const SERVICE_TYPE_TEXT = 'text';
 const SAFE_DECR_SCRIPT = fs.readFileSync('./lua/safe_decr.lua', 'utf8');
 
 exports.chargeRequestRedis = async function (input) {
     const redisClient = await getRedisClient();
-    const charges = getCharges(input.amount, input.unit);
+    const charges = getCharges(input.serviceType, input.unit);
     const evalAsync = util.promisify(redisClient.eval).bind(redisClient);
     let result = await evalAsync(SAFE_DECR_SCRIPT, 1, KEY, charges);
     console.log(result);
@@ -69,10 +73,10 @@ async function disconnectRedis(client) {
     });
 }
 function getCharges(serviceType, unit) {
-    if (serviceType == 'voice') {
+    if (serviceType == SERVICE_TYPE_VOICE) {
         return VOICE_UNIT_CHARGE * unit;
     }
-    if (serviceType == 'text') {
+    if (serviceType == SERVICE_TYPE_TEXT) {
         return TEXT_UNIT_CHARGE * unit;
     }
     throw new Error('unknown service type');
