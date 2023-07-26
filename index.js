@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const redis = require("redis");
 const fs = require("fs");
 const util = require("util");
+
 const KEY = `account1/balance`;
 const DEFAULT_BALANCE = 1000;
 const VOICE_UNIT_CHARGE = 5;
@@ -11,18 +12,28 @@ const SERVICE_TYPE_VOICE = 'voice';
 const SERVICE_TYPE_TEXT = 'text';
 const SAFE_DECR_SCRIPT = fs.readFileSync('./lua/safe_decr.lua', 'utf8');
 
-exports.chargeRequestRedis = async function (input) {
+let _redis = null;
+
+exports.chargeRequestRedis = async function (input, reconnect = true) {
     const redisClient = await getRedisClient();
-    const charges = getCharges(input.serviceType, input.unit);
-    const evalAsync = util.promisify(redisClient.eval).bind(redisClient);
-    let result = await evalAsync(SAFE_DECR_SCRIPT, 1, KEY, charges);
-    console.log(result);
-    await disconnectRedis(redisClient);
-    return {
-        'remainingBalance': result[1],
-        'isAuthorized': result[0] == 'true',
-        charges: charges
-    };
+    try {
+        const charges = getCharges(input.serviceType, input.unit);
+        const evalAsync = util.promisify(redisClient.eval).bind(redisClient);
+        let result = await evalAsync(SAFE_DECR_SCRIPT, 1, KEY, charges);
+        console.log(result);
+        return {
+            'remainingBalance': result[1],
+            'isAuthorized': result[0] == 'true',
+            charges: charges
+        };
+    } catch (error) {
+        console.log(error);
+        if (reconnect && (error instanceof SocketClosedUnexpectedlyError)) {
+            resetRedisClient();
+            return await chargeRequestRedis(input, reconnect = false);
+        }
+        throw error;
+    }
 };
 exports.resetRedis = async function () {
     const redisClient = await getRedisClient();
@@ -36,41 +47,30 @@ exports.resetRedis = async function () {
             }
         });
     });
-    await disconnectRedis(redisClient);
     return ret;
 };
-async function getRedisClient() {
-    return new Promise((resolve, reject) => {
-        try {
-            const client = new redis.RedisClient({
-                host: process.env.ENDPOINT,
-                port: parseInt(process.env.PORT || "6379"),
-            });
-            client.on("ready", () => {
-                console.log('redis client ready');
-                resolve(client);
-            });
-        }
-        catch (error) {
-            reject(error);
-        }
-    });
+function resetRedisClient() {
+    _redis = null;
 }
-async function disconnectRedis(client) {
-    return new Promise((resolve, reject) => {
-        client.quit((error, res) => {
-            if (error) {
+async function getRedisClient() {
+    if (_redis == null) {
+        _redis = new Promise((resolve, reject) => {
+            try {
+                const client = new redis.RedisClient({
+                    host: process.env.ENDPOINT,
+                    port: parseInt(process.env.PORT || "6379"),
+                });
+                client.on("ready", () => {
+                    console.log('redis client ready');
+                    resolve(client);
+                });
+            }
+            catch (error) {
                 reject(error);
             }
-            else if (res == "OK") {
-                console.log('redis client disconnected');
-                resolve(res);
-            }
-            else {
-                reject("unknown error closing redis connection.");
-            }
         });
-    });
+    }
+    return _redis;
 }
 function getCharges(serviceType, unit) {
     if (serviceType == SERVICE_TYPE_VOICE) {
